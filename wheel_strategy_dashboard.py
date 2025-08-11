@@ -266,6 +266,14 @@ def build_dashboard_data(ytd_df, use_month_labels):
     for i, v in enumerate(monthly_premium['Premium_Net']):
         ax1.text(i, v, f'${v:,.0f}', ha='center', va='bottom' if v >= 0 else 'top')
     
+    # Provide vertical padding so top labels are not clipped
+    if len(monthly_premium) > 0:
+        bar_min = float(monthly_premium['Premium_Net'].min())
+        bar_max = float(monthly_premium['Premium_Net'].max())
+        bar_range = max(1.0, abs(bar_max - bar_min))
+        bar_pad = max(10.0, 0.12 * bar_range)
+        ax1.set_ylim(bottom=min(0.0, bar_min - bar_pad), top=bar_max + bar_pad)
+    
     # Chart B: Cumulative Premium Income (line chart)
     ax2.plot(range(len(monthly_premium)), monthly_premium['Cumulative_Premium'], 
              marker='o', linewidth=2, markersize=8, color='darkgreen')
@@ -278,6 +286,14 @@ def build_dashboard_data(ytd_df, use_month_labels):
     # Add value labels on line
     for i, v in enumerate(monthly_premium['Cumulative_Premium']):
         ax2.text(i, v, f'${v:,.0f}', ha='center', va='bottom')
+    
+    # Provide vertical padding for cumulative labels as well
+    if len(monthly_premium) > 0:
+        line_min = float(monthly_premium['Cumulative_Premium'].min())
+        line_max = float(monthly_premium['Cumulative_Premium'].max())
+        line_range = max(1.0, abs(line_max - line_min))
+        line_pad = max(10.0, 0.12 * line_range)
+        ax2.set_ylim(bottom=min(0.0, line_min - line_pad), top=line_max + line_pad)
     
     plt.tight_layout()
     
