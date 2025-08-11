@@ -1,0 +1,12 @@
+# Ignore data files and generated spreadsheets
+*.csv
+*.CSV
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+
+# OS / Python artifacts
+.DS_Store
+__pycache__/
+
