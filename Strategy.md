@@ -1,5 +1,14 @@
 ## Wheel Strategy — Approach, Insights, Questions, and Recommendations
 
+### Executive summary
+- **Approach in practice**: Selling cash‑secured puts and covered calls on mostly large‑cap names/ETFs (`T`, `INTC`, `VZ`, `HPE`, `DVN`, `USO`, `XLE`) with short **~7–14 DTE** cycles and strikes generally close to spot, leading to frequent assignments.
+- **YTD activity**: 9 short option openings (STO); average DTE ≈ 7.3 days.
+- **Outcomes**: 6 assigned (66.7%), 3 expired (33.3%). Assignment‑heavy mix indicates near‑ATM strikes and an accumulation bias.
+- **Income**: YTD option premium collected ≈ **$342.06**; median per‑trade **ROI ≈ 1.16%** of collateral; average ROI ≈ 1.39%.
+- **Annualized yield (heuristic)**: mean ≈ **86.5%**, inflated by short DTE; not a forward return expectation.
+- **Cash‑based net P/L**: ≈ **-$7,308**, driven by stock purchases/assignments not yet offset by exits. This reflects an accumulation phase, not realized P/L.
+- **Risk posture**: **Moderate leaning aggressive** due to close strikes and inclusion of higher‑volatility exposures (e.g., `USO`). Not ultra‑conservative. A more conservative stance would target lower‑delta entries (≈0.15–0.25) and stricter concentration limits.
+
 ### What this strategy is
 The wheel is an income and accumulation strategy:
 - Sell cash‑secured puts on stocks/ETFs you’re willing to own at a discount. If assigned, you buy 100 shares per contract at strike.
