@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 import xlsxwriter
 from io import BytesIO
+from typing import Optional, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -294,7 +295,204 @@ def build_dashboard_data(ytd_df, use_month_labels):
     
     return monthly_display, chart_image, fig
 
-def write_excel(df, summary_df, ytd_summary_df, monthly_df, chart_image, output_path):
+def build_options_trade_metrics(ytd_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Build per-trade option STO metrics and an overview sheet (YTD only).
+
+    Returns:
+        options_trades_df: one row per STO trade with ROI, annualized yield, DTE, outcome, conservative score
+        overview_df: key metrics table for the 'WheelStrategyOverview' sheet
+    """
+    if ytd_df is None or len(ytd_df) == 0:
+        return pd.DataFrame(), pd.DataFrame()
+
+    df = ytd_df.copy()
+
+    # Helper: parse option details from Symbol/Description
+    def parse_option_details(row):
+        symbol_text = str(row.get('Symbol', '')).upper()
+        desc_text = str(row.get('Description', '')).upper()
+
+        # Try pattern from Symbol: "T 06/27/2025 28.00 C"
+        m = re.search(r"([A-Z]{1,6})\s+(\d{2}/\d{2}/\d{4})\s+([0-9]+(?:\.[0-9]+)?)\s+([CP])", symbol_text)
+        option_type: Optional[str] = None
+        strike: Optional[float] = None
+        expiry: Optional[pd.Timestamp] = None
+        ticker: Optional[str] = None
+
+        if m:
+            ticker = m.group(1)
+            expiry = pd.to_datetime(m.group(2), errors='coerce')
+            strike = float(m.group(3))
+            option_type = 'CALL' if m.group(4) == 'C' else 'PUT'
+        else:
+            # Fallbacks from Description, e.g. "CALL AT&T INC $28 EXP 06/27/25"
+            if 'CALL' in desc_text:
+                option_type = 'CALL'
+            elif 'PUT' in desc_text:
+                option_type = 'PUT'
+
+            # Strike before EXP
+            m_strike = re.search(r"\$?([0-9]+(?:\.[0-9]+)?)\s+EXP", desc_text)
+            if m_strike:
+                try:
+                    strike = float(m_strike.group(1))
+                except Exception:
+                    strike = None
+
+            # Expiration like 06/27/25
+            m_exp = re.search(r"EXP\s+(\d{2}/\d{2}/\d{2,4})", desc_text)
+            if m_exp:
+                exp_txt = m_exp.group(1)
+                # Normalize YY to YYYY (assume 20xx)
+                parts = exp_txt.split('/')
+                if len(parts[-1]) == 2:
+                    exp_txt = f"{parts[0]}/{parts[1]}/20{parts[2]}"
+                expiry = pd.to_datetime(exp_txt, errors='coerce')
+
+            # Fallback ticker: already derived in df['Ticker']
+            ticker = row.get('Ticker', None)
+
+        # Contract key for matching outcomes (string contains ticker/expiry/strike/type)
+        contract_key = None
+        if ticker and expiry is not None and strike is not None and option_type is not None:
+            contract_key = f"{ticker}|{expiry.date()}|{strike:.2f}|{option_type}"
+
+        return ticker, option_type, strike, expiry, contract_key
+
+    # Build sets of assigned/expired contract keys
+    outcome_keys = {
+        'ASSIGNED': set(),
+        'EXPIRED': set()
+    }
+
+    for _, row in df[df['Category'].isin(['Options - Assigned', 'Options - Expired'])].iterrows():
+        _, opt_type, strike, expiry, key = parse_option_details(row)
+        if key:
+            if row['Category'] == 'Options - Assigned':
+                outcome_keys['ASSIGNED'].add(key)
+            elif row['Category'] == 'Options - Expired':
+                outcome_keys['EXPIRED'].add(key)
+
+    # STO trades only
+    sto = df[df['Category'] == 'Options - STO'].copy()
+    if len(sto) == 0:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Ensure numeric quantity
+    if 'Quantity' in sto.columns:
+        try:
+            sto['Quantity'] = pd.to_numeric(sto['Quantity'], errors='coerce').fillna(1).astype(int)
+        except Exception:
+            sto['Quantity'] = 1
+    else:
+        sto['Quantity'] = 1
+
+    records = []
+    for _, row in sto.iterrows():
+        ticker, opt_type, strike, expiry, key = parse_option_details(row)
+        trade_date = row.get('TradeDate', None)
+        contracts = int(abs(row.get('Quantity', 1)))
+        premium_per_contract = float(row.get('Price', 0)) if pd.notna(row.get('Price', None)) else 0.0
+        net_premium = float(row.get('Amount', 0.0))
+
+        # DTE
+        dte = None
+        if pd.notna(expiry) and pd.notna(trade_date):
+            try:
+                dte = int((expiry.date() - trade_date.date()).days)
+            except Exception:
+                dte = None
+
+        # Collateral estimate
+        collateral = None
+        if strike is not None:
+            collateral = strike * 100 * contracts
+
+        roi = None
+        ann_yield = None
+        if collateral and collateral > 0:
+            roi = net_premium / collateral
+            if dte and dte > 0 and roi is not None:
+                ann_yield = roi * (365.0 / dte)
+
+        # Outcome
+        outcome = 'Unknown'
+        if key:
+            if key in outcome_keys['ASSIGNED']:
+                outcome = 'Assigned'
+            elif key in outcome_keys['EXPIRED']:
+                outcome = 'Expired'
+
+        # Conservative score heuristic (0-100)
+        score = 70
+        if ann_yield is not None:
+            if ann_yield > 0.3:
+                score -= 25
+            elif ann_yield > 0.2:
+                score -= 20
+            elif ann_yield > 0.1:
+                score -= 10
+        if dte is not None:
+            if dte < 5:
+                score -= 20
+            elif dte < 8:
+                score -= 10
+        if ticker in ['USO']:
+            score -= 15
+        elif ticker in ['DVN']:
+            score -= 5
+        score = max(0, min(100, score))
+
+        records.append({
+            'TradeDate': trade_date,
+            'Ticker': ticker,
+            'OptionType': opt_type,
+            'Strike': strike,
+            'ExpirationDate': expiry.date() if pd.notna(expiry) else None,
+            'Contracts': contracts,
+            'PremiumPerContract': premium_per_contract,
+            'NetPremium': net_premium,
+            'CollateralEstimate': collateral,
+            'DTE': dte,
+            'ROI': roi,
+            'AnnualizedYield': ann_yield,
+            'Outcome': outcome,
+            'ConservativeScore': score,
+        })
+
+    options_trades_df = pd.DataFrame.from_records(records)
+
+    # Overview metrics
+    total_trades = len(options_trades_df)
+    assigned_count = int((options_trades_df['Outcome'] == 'Assigned').sum())
+    expired_count = int((options_trades_df['Outcome'] == 'Expired').sum())
+    unknown_count = total_trades - assigned_count - expired_count
+    total_net_premium = float(options_trades_df['NetPremium'].sum())
+    avg_roi = float(options_trades_df['ROI'].mean()) if 'ROI' in options_trades_df and options_trades_df['ROI'].notna().any() else None
+    med_roi = float(options_trades_df['ROI'].median()) if 'ROI' in options_trades_df and options_trades_df['ROI'].notna().any() else None
+    avg_dte = float(options_trades_df['DTE'].mean()) if 'DTE' in options_trades_df and options_trades_df['DTE'].notna().any() else None
+    avg_ann = float(options_trades_df['AnnualizedYield'].mean()) if 'AnnualizedYield' in options_trades_df and options_trades_df['AnnualizedYield'].notna().any() else None
+
+    overview_rows = [
+        {'Metric': 'Total STO Trades (YTD)', 'Value': total_trades},
+        {'Metric': 'Assigned Count', 'Value': assigned_count},
+        {'Metric': 'Assigned Rate', 'Value': (assigned_count / total_trades) if total_trades else 0},
+        {'Metric': 'Expired Count', 'Value': expired_count},
+        {'Metric': 'Expired Rate', 'Value': (expired_count / total_trades) if total_trades else 0},
+        {'Metric': 'Unknown/Other Count', 'Value': unknown_count},
+        {'Metric': 'Total Net Premium (YTD)', 'Value': total_net_premium},
+        {'Metric': 'Average ROI per Trade', 'Value': avg_roi},
+        {'Metric': 'Median ROI per Trade', 'Value': med_roi},
+        {'Metric': 'Average DTE (days)', 'Value': avg_dte},
+        {'Metric': 'Average Annualized Yield', 'Value': avg_ann},
+    ]
+
+    overview_df = pd.DataFrame(overview_rows)
+
+    return options_trades_df, overview_df
+
+
+def write_excel(df, summary_df, ytd_summary_df, monthly_df, chart_image, output_path, options_trades_df=None, overview_df=None):
     """Write all data to Excel with proper formatting"""
     
     # Create workbook
@@ -356,6 +554,44 @@ def write_excel(df, summary_df, ytd_summary_df, monthly_df, chart_image, output_
         
         # Insert chart image
         dashboard_sheet.insert_image('E3', 'chart.png', {'image_data': BytesIO(chart_image)})
+
+    # 5. WheelStrategyOverview sheet
+    if overview_df is not None and not overview_df.empty:
+        overview_df.to_excel(writer, sheet_name='WheelStrategyOverview', index=False)
+        overview_sheet = writer.sheets['WheelStrategyOverview']
+        overview_sheet.set_column('A:A', 32)
+        overview_sheet.set_column('B:B', 20, number_format)
+        # Apply currency format to totals
+        for r_idx, metric in enumerate(overview_df['Metric']):
+            if 'Premium' in str(metric) or 'P/L' in str(metric):
+                overview_sheet.write(r_idx + 1, 1, overview_df.iloc[r_idx]['Value'], currency_format)
+
+    # 6. Options Trades (YTD) sheet
+    if options_trades_df is not None and not options_trades_df.empty:
+        # Order columns for readability
+        cols = [
+            'TradeDate', 'Ticker', 'OptionType', 'Strike', 'ExpirationDate', 'Contracts',
+            'PremiumPerContract', 'NetPremium', 'CollateralEstimate', 'DTE', 'ROI', 'AnnualizedYield',
+            'Outcome', 'ConservativeScore'
+        ]
+        present_cols = [c for c in cols if c in options_trades_df.columns]
+        options_trades_df[present_cols].to_excel(writer, sheet_name='Options Trades (YTD)', index=False)
+        trades_sheet = writer.sheets['Options Trades (YTD)']
+        # Column widths and formats
+        trades_sheet.set_column('A:A', 12, date_format)
+        trades_sheet.set_column('B:B', 8)
+        trades_sheet.set_column('C:C', 10)
+        trades_sheet.set_column('D:D', 10, number_format)
+        trades_sheet.set_column('E:E', 14, date_format)
+        trades_sheet.set_column('F:F', 10)
+        trades_sheet.set_column('G:G', 14, number_format)
+        trades_sheet.set_column('H:H', 14, currency_format)
+        trades_sheet.set_column('I:I', 16, currency_format)
+        trades_sheet.set_column('J:J', 8)
+        trades_sheet.set_column('K:K', 10, number_format)
+        trades_sheet.set_column('L:L', 14, number_format)
+        trades_sheet.set_column('M:M', 10)
+        trades_sheet.set_column('N:N', 10)
     
     # Save workbook
     writer.close()
@@ -390,7 +626,8 @@ def main():
     
     # Step 5: Write Excel file
     print("5. Writing Excel file...")
-    write_excel(df, summary_df, ytd_summary_df, monthly_df, chart_image, OUTPUT_FILE)
+    options_trades_df, overview_df = build_options_trade_metrics(ytd_df)
+    write_excel(df, summary_df, ytd_summary_df, monthly_df, chart_image, OUTPUT_FILE, options_trades_df, overview_df)
     
     # Print summary
     print("\n" + "=" * 60)
