@@ -37,7 +37,7 @@ Notes:
 - Currency/number fields are cleaned by stripping `$` and commas and converting to numbers.
 
 ### What the Script Produces
-An Excel file named `wheel_all_transactions_with_dashboard_and_ytd_summary_reverted.xlsx` with these sheets:
+An Excel file named `WheelStrategyOverview.xlsx` with these sheets:
 
 - Transactions: Full cleaned ledger plus derived columns (`TradeDate`, `Ticker`, `IsOption`, `Premium_Net`, `CashFlow`, `Category`, ...).
 - Summary: All‑time totals (total option premium, cash flow by category, top tickers by premium).

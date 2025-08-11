@@ -38,7 +38,9 @@ INPUT_CSV = "/Users/shawnsandy/Code Repos/StockTrades/Designated_Bene_Individual
 OUTPUT_FOLDER = "/Users/shawnsandy/Code Repos/StockTrades/"
 ANALYSIS_YEAR = 2025
 USE_MONTH_LABELS = True
-OUTPUT_FILE = os.path.join(OUTPUT_FOLDER, "wheel_all_transactions_with_dashboard_and_ytd_summary_reverted.xlsx")
+# Output workbook filename
+# Named after the primary overview sheet produced by the script
+OUTPUT_FILE = os.path.join(OUTPUT_FOLDER, "WheelStrategyOverview.xlsx")
 
 def load_and_clean(csv_path):
     """Load CSV and clean the data with robust error handling"""
